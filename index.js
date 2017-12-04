@@ -28,6 +28,50 @@ exports.Command = Command;
 exports.Option = Option;
 
 /**
+ * Expose `Environment`.
+ */
+
+exports.Environment = Environment;
+
+/**
+ * Initialize a new `Environment`.
+ *
+ * @api public
+ */
+
+function Environment() {}
+
+/**
+ * Log a standard message.
+ *
+ * @api public
+ */
+
+Environment.prototype.log = function (msg) {
+  process.stdout.write(msg);
+};
+
+/**
+ * Log an error message.
+ *
+ * @api public
+ */
+
+Environment.prototype.error = function (msg) {
+  process.stderr.write(msg);
+};
+
+/**
+ * Finish execution.
+ *
+ * @api public
+ */
+
+Environment.prototype.exit = function (exitCode) {
+  process.exit(exitCode);
+};
+
+/**
  * Initialize a new `Option` with the given `flags` and `description`.
  *
  * @param {String} flags
@@ -96,6 +140,7 @@ function Command(name) {
   this._execs = {};
   this._allowUnknownOption = false;
   this._args = [];
+  this._env = new Environment();
   this._name = name || '';
 }
 
@@ -104,6 +149,18 @@ function Command(name) {
  */
 
 Command.prototype.__proto__ = EventEmitter.prototype;
+
+/**
+ * Define the `Environment` used for this command and its children.
+ *
+ * @param {Environment} env
+ * @api public
+ */
+
+Command.prototype.environment = function(env) {
+  this._env = env;
+  return this;
+};
 
 /**
  * Add command `name`.
@@ -181,6 +238,7 @@ Command.prototype.command = function(name, desc, opts) {
     this._execs[cmd._name] = true;
     if (opts.isDefault) this.defaultExecutable = cmd._name;
   }
+  cmd._env = this._env;
   cmd._noHelp = !!opts.noHelp;
   this.commands.push(cmd);
   cmd.parseExpectedArgs(args);
@@ -279,7 +337,11 @@ Command.prototype.action = function(fn) {
     var parsed = self.parseOptions(unknown);
 
     // Output help if necessary
-    outputHelpIfNecessary(self, parsed.unknown);
+    if (containsHelp(parsed.unknown)) {
+      self.outputHelp();
+      self._env.exit(0);
+      return;
+    }
 
     // If there are still any unknown options, then we simply
     // die, unless someone asked for help, in which case we give it
@@ -510,6 +572,7 @@ Command.prototype.parse = function(argv) {
  */
 
 Command.prototype.executeSubCommand = function(argv, args, unknown) {
+  var self = this;
   args = args.concat(unknown);
 
   if (!args.length) this.help();
@@ -576,14 +639,16 @@ Command.prototype.executeSubCommand = function(argv, args, unknown) {
       }
     });
   });
-  proc.on('close', process.exit.bind(process));
+  proc.on('close', function(code) {
+    self._env.exit(code);
+  });
   proc.on('error', function(err) {
     if (err.code == "ENOENT") {
-      console.error('\n  %s(1) does not exist, try --help\n', bin);
+      self._env.error('\n  ' + bin + '(1) does not exist, try --help\n\n');
     } else if (err.code == "EACCES") {
-      console.error('\n  %s(1) not executable. try chmod or run with root\n', bin);
+      self._env.error('\n  ' + bin + '(1) not executable. try chmod or run with root\n\n');
     }
-    process.exit(1);
+    self._env.exit(1);
   });
 
   // Store the reference to the child process
@@ -655,7 +720,11 @@ Command.prototype.parseArgs = function(args, unknown) {
       this.emit('command:*', args);
     }
   } else {
-    outputHelpIfNecessary(this, unknown);
+    if (containsHelp(unknown)) {
+      this.outputHelp();
+      this._env.exit(0);
+      return;
+    }
 
     // If there were no args and we have unknown options,
     // then they are extraneous and we need to error.
@@ -787,10 +856,10 @@ Command.prototype.opts = function() {
  */
 
 Command.prototype.missingArgument = function(name) {
-  console.error();
-  console.error("  error: missing required argument `%s'", name);
-  console.error();
-  process.exit(1);
+  this._env.error("\n");
+  this._env.error("  error: missing required argument `" + name + "'");
+  this._env.error("\n\n");
+  this._env.exit(1);
 };
 
 /**
@@ -802,14 +871,14 @@ Command.prototype.missingArgument = function(name) {
  */
 
 Command.prototype.optionMissingArgument = function(option, flag) {
-  console.error();
+  this._env.error("\n");
   if (flag) {
-    console.error("  error: option `%s' argument missing, got `%s'", option.flags, flag);
+    this._env.error("  error: option `" + option.flags + "' argument missing, got `" + flag + "'");
   } else {
-    console.error("  error: option `%s' argument missing", option.flags);
+    this._env.error("  error: option `" + option.flags + "' argument missing");
   }
-  console.error();
-  process.exit(1);
+  this._env.error("\n\n");
+  this._env.exit(1);
 };
 
 /**
@@ -821,10 +890,10 @@ Command.prototype.optionMissingArgument = function(option, flag) {
 
 Command.prototype.unknownOption = function(flag) {
   if (this._allowUnknownOption) return;
-  console.error();
-  console.error("  error: unknown option `%s'", flag);
-  console.error();
-  process.exit(1);
+  this._env.error("\n");
+  this._env.error("  error: unknown option `" + flag + "'")
+  this._env.error("\n\n");
+  this._env.exit(1);
 };
 
 /**
@@ -835,10 +904,10 @@ Command.prototype.unknownOption = function(flag) {
  */
 
 Command.prototype.variadicArgNotLast = function(name) {
-  console.error();
-  console.error("  error: variadic arguments must be last `%s'", name);
-  console.error();
-  process.exit(1);
+  this._env.error("\n");
+  this._env.error("  error: variadic arguments must be last `" + name + "'");
+  this._env.error("\n\n");
+  this._env.exit(1);
 };
 
 /**
@@ -855,12 +924,13 @@ Command.prototype.variadicArgNotLast = function(name) {
 
 Command.prototype.version = function(str, flags) {
   if (0 == arguments.length) return this._version;
+  var self = this;
   this._version = str;
   flags = flags || '-V, --version';
   this.option(flags, 'output the version number');
   this.on('option:version', function() {
-    process.stdout.write(str + '\n');
-    process.exit(0);
+    self._env.write(str + '\n');
+    self._env.exit(0);
   });
   return this;
 };
@@ -1068,7 +1138,7 @@ Command.prototype.outputHelp = function(cb) {
       return passthru;
     }
   }
-  process.stdout.write(cb(this.helpInformation()));
+  this._env.log(cb(this.helpInformation()));
   this.emit('--help');
 };
 
@@ -1080,7 +1150,7 @@ Command.prototype.outputHelp = function(cb) {
 
 Command.prototype.help = function(cb) {
   this.outputHelp(cb);
-  process.exit();
+  this._env.exit(0);
 };
 
 /**
@@ -1112,21 +1182,22 @@ function pad(str, width) {
 }
 
 /**
- * Output help information if necessary
+ * Search options for -h or --help
  *
- * @param {Command} command to output help for
  * @param {Array} array of options to search for -h or --help
+ * @return {Boolean}
  * @api private
  */
 
-function outputHelpIfNecessary(cmd, options) {
-  options = options || [];
-  for (var i = 0; i < options.length; i++) {
-    if (options[i] == '--help' || options[i] == '-h') {
-      cmd.outputHelp();
-      process.exit(0);
+function containsHelp(options) {
+  if (options) {
+    for (var i = 0; i < options.length; i++) {
+      if (options[i] == '--help' || options[i] == '-h') {
+        return true;
+      }
     }
   }
+  return false;
 }
 
 /**

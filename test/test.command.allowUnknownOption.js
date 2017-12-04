@@ -5,7 +5,7 @@ var program = require('../')
     , sinon = require('sinon').sandbox.create()
     , should = require('should');
 
-var stubError = sinon.stub(console, 'error');
+var stubError = sinon.stub(process.stderr, 'write');
 var stubExit = sinon.stub(process, 'exit');
 
 program
